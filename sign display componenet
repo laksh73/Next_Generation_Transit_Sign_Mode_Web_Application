@@ -1,0 +1,152 @@
+<!-- SignDisplay.svelte -->
+<script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
+  import { derived } from 'svelte/store';
+  import ArrivalRow from './ArrivalRow.svelte';
+  import ErrorMessage from './ErrorMessage.svelte';
+  import { configStore } from '../stores/configStore';
+  import { arrivalsStore, fetchArrivals } from '../stores/arrivalsStore';
+  import type { ArrivalInfo } from '../types';
+  
+  // Derived store for filtered arrivals based on config
+  const filteredArrivals = derived(
+    [arrivalsStore, configStore],
+    ([$arrivalsStore, $configStore]) => {
+      if (!$arrivalsStore.arrivals) return [];
+      
+      return $arrivalsStore.arrivals
+        .filter(arrival => {
+          // Apply route filter if specified
+          if ($configStore.routeIds && $configStore.routeIds.length > 0) {
+            if (!$configStore.routeIds.includes(arrival.routeId)) return false;
+          }
+          
+          // Apply time window filters
+          const minutesUntilArrival = arrival.predictedArrivalTime 
+            ? Math.floor((arrival.predictedArrivalTime - Date.now()) / 60000)
+            : Math.floor((arrival.scheduledArrivalTime - Date.now()) / 60000);
+            
+          if ($configStore.minutesBefore && minutesUntilArrival < -$configStore.minutesBefore) return false;
+          if ($configStore.minutesAfter && minutesUntilArrival > $configStore.minutesAfter) return false;
+          
+          return true;
+        })
+        .sort((a, b) => {
+          // Sort by arrival time
+          const aTime = a.predictedArrivalTime || a.scheduledArrivalTime;
+          const bTime = b.predictedArrivalTime || b.scheduledArrivalTime;
+          return aTime - bTime;
+        });
+    }
+  );
+  
+  let refreshInterval: number;
+  
+  onMount(() => {
+    // Initial fetch
+    fetchArrivals($configStore.stopIds);
+    
+    // Set up refresh interval
+    if ($configStore.refreshSeconds) {
+      refreshInterval = window.setInterval(() => {
+        fetchArrivals($configStore.stopIds);
+      }, $configStore.refreshSeconds * 1000);
+    }
+  });
+  
+  onDestroy(() => {
+    if (refreshInterval) clearInterval(refreshInterval);
+  });
+</script>
+
+<div class="sign-display" class:dark-mode={$configStore.darkMode}>
+  {#if $configStore.showTitle !== false}
+    <header class="sign-header">
+      <h1>{$configStore.title || $arrivalsStore.stopName || 'Bus Arrivals'}</h1>
+    </header>
+  {/if}
+  
+  <div class="arrivals-container">
+    {#if $arrivalsStore.loading}
+      <div class="loading-indicator">Loading arrival information...</div>
+    {:else if $arrivalsStore.error}
+      <ErrorMessage message={$arrivalsStore.error} />
+    {:else if $filteredArrivals.length === 0}
+      <div class="no-arrivals">No arrivals in the next {$configStore.minutesAfter || 30} minutes</div>
+    {:else}
+      {#each $filteredArrivals as arrival (arrival.id)}
+        <ArrivalRow {arrival} />
+      {/each}
+    {/if}
+  </div>
+  
+  <footer class="sign-footer">
+    <div class="last-updated">
+      Last updated: {new Date().toLocaleTimeString()}
+    </div>
+  </footer>
+</div>
+
+<style>
+  .sign-display {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 1rem;
+    font-family: system-ui, -apple-system, sans-serif;
+    background-color: white;
+    color: #333;
+  }
+  
+  .dark-mode {
+    background-color: #222;
+    color: #fff;
+  }
+  
+  .sign-header {
+    text-align: center;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #ddd;
+  }
+  
+  .dark-mode .sign-header {
+    border-bottom-color: #555;
+  }
+  
+  h1 {
+    font-size: 2.5rem;
+    margin: 0;
+  }
+  
+  .arrivals-container {
+    flex: 1;
+    overflow-y: auto;
+  }
+  
+  .loading-indicator,
+  .no-arrivals {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    font-size: 1.5rem;
+    color: #666;
+  }
+  
+  .dark-mode .loading-indicator,
+  .dark-mode .no-arrivals {
+    color: #aaa;
+  }
+  
+  .sign-footer {
+    padding-top: 0.5rem;
+    text-align: right;
+    font-size: 0.875rem;
+    color: #666;
+  }
+  
+  .dark-mode .sign-footer {
+    color: #aaa;
+  }
+</style>
